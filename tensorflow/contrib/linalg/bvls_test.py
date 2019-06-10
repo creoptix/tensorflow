@@ -18,9 +18,19 @@ import time
 import unittest
 
 import numpy as np
-import tensorflow as tf
 
 from tensorflow.python import convert_to_tensor
+
+from tensorflow.python.client import session
+from tensorflow.python.framework import constant_op
+from tensorflow.python.framework import ops
+from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import clip_ops
+from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import special_math_ops
+from tensorflow.python.ops import variables
+from tensorflow.python.ops.linalg import linalg_impl
+from tensorflow.python.training import adam
 
 from tensorflow.contrib.linalg.bvls import (
     lstsq_negative_gradient,
@@ -68,36 +78,36 @@ class TestTfBvls(unittest.TestCase):
         nw = m.shape[1]
 
         if noise_precision is None:
-            noise_precision = tf.constant(1., dtype=m.dtype)
+            noise_precision = constant_op.constant(1., dtype=m.dtype)
 
         if prior_precision is None:
-            prior_precision = tf.zeros(nw, dtype=rhs.dtype)
+            prior_precision = array_ops.zeros(nw, dtype=rhs.dtype)
 
         if target_weights is None:
-            target_weights = tf.ones_like(rhs, dtype=rhs.dtype)
+            target_weights = array_ops.ones_like(rhs, dtype=rhs.dtype)
 
-        w = tf.Variable(
-            tf.zeros((nw,), dtype=m.dtype),
-            constraint=lambda x: tf.clip_by_value(x, lower_bounds, upper_bounds),
+        w = variables.Variable(
+            array_ops.zeros((nw,), dtype=m.dtype),
+            constraint=lambda x: clip_ops.clip_by_value(x, lower_bounds, upper_bounds),
             name="w",
         )
 
         # Least square residuals
-        lstsq_residuals = target_weights * (tf.einsum("ij,j->i", m, w) - rhs)
+        lstsq_residuals = target_weights * (special_math_ops.einsum("ij,j->i", m, w) - rhs)
 
         # Least square loss
-        tf_loss = noise_precision * tf.reduce_sum(tf.square(lstsq_residuals))
+        tf_loss = noise_precision * math_ops.reduce_sum(math_ops.square(lstsq_residuals))
 
         # Prior loss
-        tf_loss += tf.reduce_sum(prior_precision * w * w)
+        tf_loss += math_ops.reduce_sum(prior_precision * w * w)
 
-        train = tf.train.AdamOptimizer(0.01).minimize(
+        train = adam.AdamOptimizer(0.01).minimize(
             tf_loss,
             var_list=[w],
         )
-        init = tf.global_variables_initializer()
+        init = variables.global_variables_initializer()
 
-        with tf.Session() as sess:
+        with session.Session() as sess:
             sess.run(init)
 
             loss_prev = 1E30
@@ -156,9 +166,9 @@ class TestTfBvls(unittest.TestCase):
         Check that the variable at the boundary with the largest gradient is being freed.
         """
 
-        m1 = tf.convert_to_tensor(self.m1)
-        rhs1 = tf.convert_to_tensor(self.rhs1)
-        l1 = tf.convert_to_tensor(self.l1)
+        m1 = ops.convert_to_tensor(self.m1)
+        rhs1 = ops.convert_to_tensor(self.rhs1)
+        l1 = ops.convert_to_tensor(self.l1)
 
         # Negative gradient
         n_grad = lstsq_negative_gradient(m1, rhs1, l1)
@@ -167,7 +177,7 @@ class TestTfBvls(unittest.TestCase):
         upper_mask = [True, False, False]
         tf_result = free_variable_with_largest_gradient(n_grad, lower_mask, upper_mask)
 
-        with tf.Session() as sess:
+        with session.Session() as sess:
             result = sess.run(tf_result)
             np.testing.assert_equal(result[0], [False, False, False])
             np.testing.assert_equal(result[1], [True, False, False])
@@ -177,9 +187,9 @@ class TestTfBvls(unittest.TestCase):
         Check that the variable at the boundary with the largest gradient is being freed.
         """
 
-        m1 = tf.convert_to_tensor(self.m1.reshape((1, 3, 3)))
-        rhs1 = tf.convert_to_tensor(self.rhs1.reshape((1, 3)))
-        l1 = tf.convert_to_tensor(self.l1.reshape((1, 3)))
+        m1 = ops.convert_to_tensor(self.m1.reshape((1, 3, 3)))
+        rhs1 = ops.convert_to_tensor(self.rhs1.reshape((1, 3)))
+        l1 = ops.convert_to_tensor(self.l1.reshape((1, 3)))
 
         # Negative gradient
         n_grad = lstsq_negative_gradient(m1, rhs1, l1, axis=2)
@@ -188,7 +198,7 @@ class TestTfBvls(unittest.TestCase):
         upper_mask = [[True, False, False]]
         tf_result = free_variable_with_largest_gradient(n_grad, lower_mask, upper_mask)
 
-        with tf.Session() as sess:
+        with session.Session() as sess:
             result = sess.run(tf_result)
             np.testing.assert_equal(result[0], [[False, False, False]])
             np.testing.assert_equal(result[1], [[True, False, False]])
@@ -202,13 +212,13 @@ class TestTfBvls(unittest.TestCase):
         upper_mask = [True, False, False]
         center_mask = [False, False, True]
 
-        m = tf.convert_to_tensor(self.m1)
-        rhs = tf.convert_to_tensor(self.rhs1)
+        m = ops.convert_to_tensor(self.m1)
+        rhs = ops.convert_to_tensor(self.rhs1)
 
         tf_result = free_lstsq(
             m, rhs, center_mask, lower_mask, self.l1, upper_mask, self.u1, fast=False)
 
-        with tf.Session() as sess:
+        with session.Session() as sess:
             result = sess.run(tf_result)
             np.testing.assert_almost_equal(result, [0, 0, self.v1[-1]], decimal=4)
 
@@ -226,7 +236,7 @@ class TestTfBvls(unittest.TestCase):
         tf_result = free_bounded_step(
             center_mask, cvs, lower_mask, self.l1, upper_mask, self.u1)
 
-        with tf.Session() as sess:
+        with session.Session() as sess:
             result, _ = sess.run(tf_result)
             np.testing.assert_almost_equal(result, [1, -0.5, self.v1[-1]], decimal=4)
 
@@ -244,7 +254,7 @@ class TestTfBvls(unittest.TestCase):
         tf_result = free_bounded_step(
             center_mask, cvs, lower_mask, self.l1, upper_mask, self.u1)
 
-        with tf.Session() as sess:
+        with session.Session() as sess:
             result, _ = sess.run(tf_result)
             np.testing.assert_almost_equal(result, [1, -0.5, 1.0], decimal=4)
 
@@ -257,7 +267,7 @@ class TestTfBvls(unittest.TestCase):
 
         tf_result = tf_bvls(self.m1, self.rhs1, self.l1, self.u1, fast=False)
 
-        with tf.Session() as sess:
+        with session.Session() as sess:
             result = sess.run(tf_result)
             print(result)
             np.testing.assert_almost_equal(result, [1, -0.5, self.v1[-1]], decimal=4)
@@ -267,14 +277,14 @@ class TestTfBvls(unittest.TestCase):
         Check that the bounded least square regression works for a batch input.
         """
 
-        m_batch = tf.convert_to_tensor(np.tile(self.m1, (2, 1, 1)))
-        rhs_batch = tf.convert_to_tensor(np.tile(self.rhs1, (2, 1)))
-        lb_batch = tf.convert_to_tensor(np.tile(self.l1, (2, 1)))
-        ub_batch = tf.convert_to_tensor(np.tile(self.u1, (2, 1)))
+        m_batch = ops.convert_to_tensor(np.tile(self.m1, (2, 1, 1)))
+        rhs_batch = ops.convert_to_tensor(np.tile(self.rhs1, (2, 1)))
+        lb_batch = ops.convert_to_tensor(np.tile(self.l1, (2, 1)))
+        ub_batch = ops.convert_to_tensor(np.tile(self.u1, (2, 1)))
 
         tf_result = tf_bvls_batch(m_batch, rhs_batch, lb_batch, ub_batch, fast=False)
 
-        with tf.Session() as sess:
+        with session.Session() as sess:
             result = sess.run(tf_result)
             print(result)
             # np.testing.assert_almost_equal(result, [1, -0.5, self.v1[-1]], decimal=4)
@@ -299,10 +309,10 @@ class TestTfBvls(unittest.TestCase):
                 fast=False,
                 return_iterations=True,
             )
-            tf_lstsq_result = tf.linalg.lstsq(m, tf.expand_dims(rhs, -1))
+            tf_lstsq_result = linalg_impl.lstsq(m, array_ops.expand_dims(rhs, -1))
             tf_loss = noise_precision * lstsq_squared_residuals_sum(m, tf_bvls_result[0], rhs, tws)
 
-            with tf.Session() as sess:
+            with session.Session() as sess:
                 (w_result, i), bvls_time = self.timed_execution(lambda: sess.run(tf_bvls_result))
                 _, lstsq_time = self.timed_execution(lambda: sess.run(tf_lstsq_result))
                 loss = sess.run(tf_loss)
